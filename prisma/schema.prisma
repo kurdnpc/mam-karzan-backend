@@ -1,0 +1,227 @@
+// Mam Karzan data model.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// Users & roles
+
+enum Role {
+  OWNER // خاوەن: everything
+  MANAGER // بەڕێوەبەر: everything except store settings and users
+  STAFF // کارمەند: add and edit items only
+}
+
+enum UserStatus {
+  ACTIVE
+  INVITED // invitation sent, has not logged in yet
+}
+
+model User {
+  id           String     @id @default(cuid())
+  name         String
+  phone        String     @unique // login username (mobile number)
+  passwordHash String
+  role         Role       @default(STAFF)
+  status       UserStatus @default(INVITED)
+  lastActiveAt DateTime?
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+}
+
+// Categories
+// Two levels: a main category (parentId = null) and its subcategories.
+// Items always belong to a subcategory.
+
+model Category {
+  id        String     @id @default(cuid())
+  name      String
+  slug      String // English URL part chosen by the admin: /c/{main}/{sub}
+  icon      String? // lucide icon name, e.g. "smartphone", "sim", "headphones"
+  image     String? // uploaded image URL; shown instead of the icon when set
+  isVisible Boolean    @default(true)
+  sortOrder Int        @default(0)
+  parentId  String?
+  parent    Category?  @relation("CategoryTree", fields: [parentId], references: [id], onDelete: Cascade)
+  children  Category[] @relation("CategoryTree")
+  items     Item[]
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+
+  @@unique([parentId, slug])
+  @@index([parentId])
+}
+
+// Items
+
+enum ItemType {
+  PRODUCT // phone, watch, accessory… (has images)
+  NUMBER // SIM / VIP phone number (usually no image)
+}
+
+enum PriceType {
+  IQD // دینار
+  USD // دۆلار
+  NONE // بێ نرخ: "ask on WhatsApp", price hidden, no discount possible
+}
+
+enum DiscountType {
+  NONE
+  PERCENT // ڕێژە %
+  FIXED_PRICE // نرخی نوێ: discountValue is the new price
+}
+
+enum SimOperator {
+  KOREK // کۆرەک
+  ASIACELL // ئاسیاسێل
+  ZAIN // زەین
+}
+
+model Item {
+  id          String   @id @default(cuid())
+  type        ItemType @default(PRODUCT)
+  name        String? // optional: numbers are often "بێ ناو"
+  code        Int      @unique @default(autoincrement()) // public number in the URL: /c/{main}/{sub}/{code}
+  description String?  @db.VarChar(500)
+  categoryId  String
+  category    Category @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+
+  priceType PriceType @default(IQD)
+  price     Decimal?  @db.Decimal(14, 2)
+
+  discountType    DiscountType @default(NONE)
+  discountValue   Decimal?     @db.Decimal(14, 2)
+  discountEndsAt  DateTime? // کۆتایی: null means no end date
+
+  // NUMBER-only fields (SIM category / Number Detail page)
+  phoneNumber String?      @unique // "07801000000", displayed grouped "0780 100 0000"
+  operator    SimOperator?
+  isVip       Boolean      @default(false)
+  pattern     String? // e.g. "سفری دووبارە", "حەوتی دووبارە"
+
+  isVisible   Boolean  @default(true) // پیشاندان لە ماڵپەڕ
+  isAvailable Boolean  @default(true) // بەردەستە
+  viewCount   Int      @default(0)
+
+  images   ItemImage[]
+  features ItemFeature[]
+  clicks   WhatsappClick[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([categoryId])
+  @@index([isVisible, createdAt])
+}
+
+model ItemImage {
+  id        String @id @default(cuid())
+  itemId    String
+  item      Item   @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  url       String
+  sortOrder Int    @default(0)
+
+  @@index([itemId])
+}
+
+// "لیست (خاڵەکان)": bullet points with a green check on the item page
+model ItemFeature {
+  id        String @id @default(cuid())
+  itemId    String
+  item      Item   @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  text      String
+  sortOrder Int    @default(0)
+
+  @@index([itemId])
+}
+
+// Analytics
+
+model WhatsappClick {
+  id        String   @id @default(cuid())
+  itemId    String?
+  item      Item?    @relation(fields: [itemId], references: [id], onDelete: SetNull)
+  source    String? // "item", "card", "floating", "contact", …
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+}
+
+// Store settings: single row, id = 1
+
+model StoreSettings {
+  id Int @id @default(1)
+
+  // زانیاری فرۆشگا
+  storeName   String  @default("مام کارزان")
+  storeNameEn String  @default("Mam Karzan")
+  tagline     String? @default("مۆبایل و ژمارە")
+  logo        String?
+  address     String?
+  addressNote String?
+  mapUrl      String?
+  openTime    String  @default("10:00")
+  closeTime   String  @default("23:00")
+  aboutText   String?
+
+  // واتسئاپ
+  whatsappCountryCode    String  @default("+964")
+  whatsappNumber         String  @default("7501234567")
+  secondaryPhone         String?
+  whatsappTemplate       String  @default("سڵاو، دەمەوێت ئەم کاڵایە داوا بکەم:\n{ناوی کاڵا}\nنرخ: {نرخ}\n{بەستەر}")
+  floatingWhatsappButton Boolean @default(true)
+
+  // IQD per 1 USD, used to sort mixed-currency prices on the website
+  usdRate Int @default(1500)
+
+  // تۆڕە کۆمەڵایەتییەکان
+  instagram String?
+  facebook  String?
+  telegram  String?
+  tiktok    String?
+
+  // ڕووکار: home promo banner
+  promoTitle    String?
+  promoSubtitle String?
+  promoImage    String?
+  promoEndsAt   DateTime?
+
+  updatedAt DateTime @updatedAt
+}
+
+// Website content
+
+// Home / "براندە تۆرجیناڵەکان"
+model Brand {
+  id        String  @id @default(cuid())
+  name      String
+  logo      String?
+  isVisible Boolean @default(true)
+  sortOrder Int     @default(0)
+}
+
+// Home / "کڕیاران چی دەڵێن؟"
+model Testimonial {
+  id        String   @id @default(cuid())
+  name      String
+  subtitle  String? // e.g. "سلێمانی · ژمارەی VIP"
+  text      String
+  rating    Int      @default(5)
+  isVisible Boolean  @default(true)
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+}
+
+// Contact / "پرسیارە باوەکان"
+model Faq {
+  id        String  @id @default(cuid())
+  question  String
+  answer    String
+  isVisible Boolean @default(true)
+  sortOrder Int     @default(0)
+}
