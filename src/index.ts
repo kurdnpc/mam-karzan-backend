@@ -14,6 +14,23 @@ const app = express();
 const PORT = Number(process.env.PORT) || 4000;
 
 app.set("trust proxy", 1);
+
+// Domains listed in REDIRECT_HOSTS (e.g. the bare "mamkarzan.com") are attached to this service
+// only to forward visitors to the main site address in CANONICAL_URL.
+const redirectHosts = new Set(
+  (process.env.REDIRECT_HOSTS ?? "")
+    .split(",")
+    .map((h) => h.trim().toLowerCase())
+    .filter(Boolean),
+);
+const canonicalUrl = process.env.CANONICAL_URL?.replace(/\/$/, "");
+if (canonicalUrl && redirectHosts.size) {
+  app.use((req, res, next) => {
+    if (redirectHosts.has((req.hostname ?? "").toLowerCase())) return res.redirect(301, canonicalUrl + req.originalUrl);
+    next();
+  });
+}
+
 app.use(compression());
 app.use(
   cors({
